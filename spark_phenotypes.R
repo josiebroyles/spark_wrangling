@@ -171,3 +171,14 @@ common_cols <- setdiff(common_cols, c("subject_sp_id", "snv_genetic_status", "cn
 # Reorder merged_df: ID + genetic columns first, then matching columns in searchlight order
 merged_df <- merged_df[, c("subject_sp_id", "snv_genetic_status", "cnv_genetic_status", common_cols), with = FALSE]
 
+df_for_lda = merged_df %>%
+  .[, genetic_status := fcoalesce(snv_genetic_status, cnv_genetic_status)] %>%
+  .[, !"snv_genetic_status"] %>%
+  .[, !"cnv_genetic_status"] %>%
+  setcolorder("genetic_status") %>%
+  setnames(names(.)[2], "sfari_id") %>%
+  .[, "merged" := NULL]
+
+
+###### Save it for use in LDA 
+fwrite(df_for_lda, "~/Desktop/sebatlab/spark_wrangling/df_spark_phenotypes.tsv", sep = "\t")
