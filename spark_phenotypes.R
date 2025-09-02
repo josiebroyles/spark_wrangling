@@ -171,13 +171,16 @@ common_cols <- setdiff(common_cols, c("subject_sp_id", "snv_genetic_status", "cn
 # Reorder merged_df: ID + genetic columns first, then matching columns in searchlight order
 merged_df <- merged_df[, c("subject_sp_id", "snv_genetic_status", "cnv_genetic_status", common_cols), with = FALSE]
 
+
 df_for_lda = merged_df %>%
-  .[, genetic_status := fcoalesce(snv_genetic_status, cnv_genetic_status)] %>%
-  .[, !"snv_genetic_status"] %>%
-  .[, !"cnv_genetic_status"] %>%
-  setcolorder("genetic_status") %>%
-  setnames(names(.)[2], "sfari_id") %>%
-  .[, "merged" := NULL]
+  mutate(
+    snv_genetic_status = na_if(snv_genetic_status, ""),
+    cnv_genetic_status = na_if(cnv_genetic_status, "")
+  ) %>%
+  mutate(genetic_status = coalesce(snv_genetic_status, cnv_genetic_status)) %>% 
+  select(-snv_genetic_status, -cnv_genetic_status) %>% 
+  rename("sfari_id" = "subject_sp_id") %>% 
+  select(sfari_id, genetic_status, everything())
 
 
 ###### Save it for use in LDA 

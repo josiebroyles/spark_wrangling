@@ -27,15 +27,18 @@ searchlight_df = fread("df_phenotypes.tsv") %>%
   mutate(genetic_status = as.factor(genetic_status)) %>%
   select(-all_of(cols_to_remove))
 
+
 setwd("/Users/josie/Desktop/sebatlab/spark_wrangling")
 df_phenotypes = fread("df_spark_phenotypes.tsv")%>%
+  filter(!is.na(genetic_status) & genetic_status != "") %>%
   mutate(genetic_status = as.factor(genetic_status)) %>%
-  select(all_of(cols)) %>%
   mutate(prop_na = rowMeans(is.na(.))) %>% # Proportion of NAs per row
   filter(prop_na < 0.40) %>% # Remove samples with missingness greater than 0.40
-  filter(!is.na(genetic_status) & genetic_status != "") %>% # Remove samples that don't have genetic_status
   select(-prop_na) %>%
   droplevels()
+
+df_phenotypes_untouched = fread("df_spark_phenotypes.tsv")
+
 
 ###################################################################################################
 # Functions
@@ -239,23 +242,53 @@ df_imputed_with_pcs_lds = cbind(df_imputed_with_pcs, lda_pred$x)
 is.data.table(df_imputed_with_pcs_lds)
 
 ###################################################################################################
-# Spark trained LDA tested on Spark data | Accuracy : 0.4706   
+# LDA (Trained on Searchlight)
 ###################################################################################################
-# 1. Predict on df_imputed
-lda_pred_test <- predict(lda_model, newdata = df_imputed %>% select(-sfari_id, -genetic_status))
 
-# 2. Align factor levels between prediction and reference
-common_levels <- intersect(levels(lda_pred_test$class), levels(df_imputed$genetic_status))
-pred_aligned <- factor(lda_pred_test$class, levels = common_levels)
-ref_aligned  <- factor(df_imputed$genetic_status, levels = common_levels)
+searchlight_imputed_renamed = searchlight_imputed %>%
+  mutate(genetic_status = recode(genetic_status,
+                                 "16p11.2 duplication" = "16p11.2_DUP",
+                                 "16p11.2 deletion"    = "16p11.2_DEL",
+                                 "1q21.1 deletion"     = "1q21.1_DEL",
+                                 "1q21.1 duplication"  = "1q21.1_DUP",
+                                 "MED13L"              = "MED13"   ))
 
-# 3. Compute confusion matrix
-confusion_matrix <- confusionMatrix(pred_aligned, ref_aligned)
+# Run PCA on phenotypes ("phenotypic PCA")
+pca_result = prcomp(searchlight_imputed_renamed %>% select(-genetic_status, -sfari_id), scale. = TRUE)
+df_imputed_with_pcs = cbind(searchlight_imputed_renamed, pca_result$x)
+
+# Run LDA on phenotypes
+lda_model = lda(genetic_status ~ ., data = searchlight_imputed_renamed %>% select(-sfari_id) ) 
+lda_pred = predict(lda_model) # Predict (on the same data that was trained on...)
+# Create a confusion matrix to evaluate the predictions
+confusion_matrix = confusionMatrix(lda_pred$class, searchlight_imputed_renamed$genetic_status)
+# Visualize the confusion matrix
 print(confusion_matrix)
 
+# Create a combined data.table with the genetic_status, sfari_id, phenotypes, PCs, and LDs, and demographics...
+df_imputed_with_pcs_lds = cbind(df_imputed_with_pcs, lda_pred$x)
+is.data.table(df_imputed_with_pcs_lds)
+
+
 ###################################################################################################
-# Spark trained LDA tested on Searchlight data | Accuracy : 0
+# TRAINED: SPARK, TESTED: SEARCHLIGHT | Accuracy : 0
 ###################################################################################################
+
+# Run PCA on phenotypes ("phenotypic PCA")
+pca_result = prcomp(df_imputed %>% select(-genetic_status, -sfari_id), scale. = TRUE)
+df_imputed_with_pcs = cbind(df_imputed, pca_result$x)
+
+# Run LDA on phenotypes
+lda_model = lda(genetic_status ~ ., data = df_imputed %>% select(-sfari_id) ) 
+lda_pred = predict(lda_model) # Predict (on the same data that was trained on...)
+# Create a confusion matrix to evaluate the predictions
+confusion_matrix = confusionMatrix(lda_pred$class, df_imputed$genetic_status)
+# Visualize the confusion matrix
+print(confusion_matrix)
+
+# Create a combined data.table with the genetic_status, sfari_id, phenotypes, PCs, and LDs, and demographics...
+df_imputed_with_pcs_lds = cbind(df_imputed_with_pcs, lda_pred$x)
+is.data.table(df_imputed_with_pcs_lds)
 
 # Define predictors (excluding ID and outcome)
 predictor_cols <- setdiff(colnames(searchlight_imputed), c("sfari_id", "genetic_status"))
@@ -273,28 +306,31 @@ confusion_matrix <- confusionMatrix(pred_aligned, ref_aligned)
 print(confusion_matrix)
 
 ###################################################################################################
-# LDA (Trained on Searchlight)
+# TRAINED: SEARCHLIGHT, TESTED: SPARK | Accuracy : 0.1852 
 ###################################################################################################
+searchlight_imputed_renamed = searchlight_imputed %>%
+  mutate(genetic_status = recode(genetic_status,
+                                 "16p11.2 duplication" = "16p11.2_DUP",
+                                 "16p11.2 deletion"    = "16p11.2_DEL",
+                                 "1q21.1 deletion"     = "1q21.1_DEL",
+                                 "1q21.1 duplication"  = "1q21.1_DUP",
+                                 "MED13L"              = "MED13"   ))
 
 # Run PCA on phenotypes ("phenotypic PCA")
-pca_result = prcomp(searchlight_imputed %>% select(-genetic_status, -sfari_id), scale. = TRUE)
-df_imputed_with_pcs = cbind(searchlight_imputed, pca_result$x)
+pca_result = prcomp(searchlight_imputed_renamed %>% select(-genetic_status, -sfari_id), scale. = TRUE)
+df_imputed_with_pcs = cbind(searchlight_imputed_renamed, pca_result$x)
 
 # Run LDA on phenotypes
-lda_model = lda(genetic_status ~ ., data = searchlight_imputed %>% select(-sfari_id) ) 
+lda_model = lda(genetic_status ~ ., data = searchlight_imputed_renamed %>% select(-sfari_id) ) 
 lda_pred = predict(lda_model) # Predict (on the same data that was trained on...)
 # Create a confusion matrix to evaluate the predictions
-confusion_matrix = confusionMatrix(lda_pred$class, searchlight_imputed$genetic_status)
+confusion_matrix = confusionMatrix(lda_pred$class, searchlight_imputed_renamed$genetic_status)
 # Visualize the confusion matrix
 print(confusion_matrix)
 
 # Create a combined data.table with the genetic_status, sfari_id, phenotypes, PCs, and LDs, and demographics...
 df_imputed_with_pcs_lds = cbind(df_imputed_with_pcs, lda_pred$x)
 is.data.table(df_imputed_with_pcs_lds)
-
-###################################################################################################
-# Searchlight trained LDA tested on Spark data | Accuracy : 0.1818
-###################################################################################################
 
 # Define predictors (excluding ID and outcome)
 predictor_cols <- setdiff(colnames(df_imputed), c("sfari_id", "genetic_status"))
@@ -310,4 +346,161 @@ ref_aligned  <- factor(df_imputed$genetic_status, levels = common_levels)
 # 3. Compute confusion matrix
 confusion_matrix <- confusionMatrix(pred_aligned, ref_aligned)
 print(confusion_matrix)
+
+###################################################################################################
+# TRAINED: SPARK, TESTED: SEARCHLIGHT SUBSET | Accuracy : 0.0769
+###################################################################################################
+
+# Run PCA on phenotypes ("phenotypic PCA")
+pca_result = prcomp(df_imputed %>% select(-genetic_status, -sfari_id), scale. = TRUE)
+df_imputed_with_pcs = cbind(df_imputed, pca_result$x)
+
+# Run LDA on phenotypes
+lda_model = lda(genetic_status ~ ., data = df_imputed %>% select(-sfari_id) ) 
+lda_pred = predict(lda_model) # Predict (on the same data that was trained on...)
+# Create a confusion matrix to evaluate the predictions
+confusion_matrix = confusionMatrix(lda_pred$class, df_imputed$genetic_status)
+# Visualize the confusion matrix
+print(confusion_matrix)
+
+# Create a combined data.table with the genetic_status, sfari_id, phenotypes, PCs, and LDs, and demographics...
+df_imputed_with_pcs_lds = cbind(df_imputed_with_pcs, lda_pred$x)
+is.data.table(df_imputed_with_pcs_lds)
+
+
+a = df_imputed %>% count(genetic_status)
+b = searchlight_imputed %>% count (genetic_status)
+searchlight_df_with_commmon_levels = searchlight_imputed %>% 
+  filter(grepl("16p11.2|ASXL3|1q21.1|CTNNB1|DYRK1A|GRIN2B|MED13|PPP2R5D|SCN2A|SETBP1|SLC6A1|STXBP1|SYNGAP1", genetic_status)) %>% 
+  mutate(genetic_status = recode(genetic_status,
+                                 "16p11.2 duplication" = "16p11.2_DUP",
+                                 "16p11.2 deletion"    = "16p11.2_DEL",
+                                 "1q21.1 deletion"     = "1q21.1_DEL",
+                                 "1q21.1 duplication"  = "1q21.1_DUP",
+                                 "MED13L"              = "MED13"   ))
+
+# Define predictors (excluding ID and outcome)
+predictor_cols <- setdiff(colnames(searchlight_df_with_commmon_levels), c("sfari_id", "genetic_status"))
+
+# 1. Predict on searchlight_imputed
+lda_pred_test <- predict(lda_model, newdata = searchlight_df_with_commmon_levels %>% select(-sfari_id, -genetic_status))
+
+# 2. Align factor levels between prediction and reference
+common_levels <- intersect(levels(lda_pred_test$class), levels(searchlight_df_with_commmon_levels$genetic_status))
+pred_aligned <- factor(lda_pred_test$class, levels = common_levels)
+ref_aligned  <- factor(searchlight_df_with_commmon_levels$genetic_status, levels = common_levels)
+
+# 3. Compute confusion matrix
+confusion_matrix <- confusionMatrix(pred_aligned, ref_aligned)
+print(confusion_matrix)
+
+
+
+###################################################################################################
+# TRAINED: SPARK SUBSET, TESTED: SEARCHLIGHT SUBSET | Accuracy : 0.1154
+###################################################################################################
+a = df_imputed %>% count(genetic_status)
+b = searchlight_imputed %>% count (genetic_status)
+spark_df_with_commmon_levels = df_imputed %>% 
+  filter(grepl("16p11.2|ASXL3|1q21.1|CTNNB1|DYRK1A|GRIN2B|MED13|PPP2R5D|SCN2A|SETBP1|SLC6A1|STXBP1|SYNGAP1", genetic_status)) 
+
+
+# Run PCA on phenotypes ("phenotypic PCA")
+pca_result = prcomp(spark_df_with_commmon_levels %>% select(-genetic_status, -sfari_id), scale. = TRUE)
+df_imputed_with_pcs = cbind(spark_df_with_commmon_levels, pca_result$x)
+
+# Run LDA on phenotypes
+lda_model = lda(genetic_status ~ ., data = spark_df_with_commmon_levels %>% select(-sfari_id) ) 
+lda_pred = predict(lda_model) # Predict (on the same data that was trained on...)
+# Create a confusion matrix to evaluate the predictions
+confusion_matrix = confusionMatrix(lda_pred$class, spark_df_with_commmon_levels$genetic_status)
+# Visualize the confusion matrix
+print(confusion_matrix)
+
+# Create a combined data.table with the genetic_status, sfari_id, phenotypes, PCs, and LDs, and demographics...
+df_imputed_with_pcs_lds = cbind(df_imputed_with_pcs, lda_pred$x)
+is.data.table(df_imputed_with_pcs_lds)
+
+
+
+searchlight_df_with_commmon_levels = searchlight_imputed %>% 
+  filter(grepl("16p11.2|ASXL3|1q21.1|CTNNB1|DYRK1A|GRIN2B|MED13|PPP2R5D|SCN2A|SETBP1|SLC6A1|STXBP1|SYNGAP1", genetic_status)) %>% 
+  mutate(genetic_status = recode(genetic_status,
+                                 "16p11.2 duplication" = "16p11.2_DUP",
+                                 "16p11.2 deletion"    = "16p11.2_DEL",
+                                 "1q21.1 deletion"     = "1q21.1_DEL",
+                                 "1q21.1 duplication"  = "1q21.1_DUP",
+                                 "MED13L"              = "MED13"   ))
+
+# Define predictors (excluding ID and outcome)
+predictor_cols <- setdiff(colnames(searchlight_df_with_commmon_levels), c("sfari_id", "genetic_status"))
+
+# 1. Predict on searchlight_imputed
+lda_pred_test <- predict(lda_model, newdata = searchlight_df_with_commmon_levels %>% select(-sfari_id, -genetic_status))
+
+# 2. Align factor levels between prediction and reference
+common_levels <- intersect(levels(lda_pred_test$class), levels(searchlight_df_with_commmon_levels$genetic_status))
+pred_aligned <- factor(lda_pred_test$class, levels = common_levels)
+ref_aligned  <- factor(searchlight_df_with_commmon_levels$genetic_status, levels = common_levels)
+
+# 3. Compute confusion matrix
+confusion_matrix <- confusionMatrix(pred_aligned, ref_aligned)
+print(confusion_matrix)
+
+###################################################################################################
+# TRAINED: SEARCHLIGHT, TEST: SPARK SUBSET | Accuracy: 0.1852
+###################################################################################################
+
+searchlight_imputed_renamed = searchlight_imputed %>%
+  mutate(genetic_status = recode(genetic_status,
+                                 "16p11.2 duplication" = "16p11.2_DUP",
+                                 "16p11.2 deletion"    = "16p11.2_DEL",
+                                 "1q21.1 deletion"     = "1q21.1_DEL",
+                                 "1q21.1 duplication"  = "1q21.1_DUP",
+                                 "MED13L"              = "MED13"   ))
+
+# Run PCA on phenotypes ("phenotypic PCA")
+pca_result = prcomp(searchlight_imputed_renamed %>% select(-genetic_status, -sfari_id), scale. = TRUE)
+df_imputed_with_pcs = cbind(searchlight_imputed_renamed, pca_result$x)
+
+# Run LDA on phenotypes
+lda_model = lda(genetic_status ~ ., data = searchlight_imputed_renamed %>% select(-sfari_id) ) 
+lda_pred = predict(lda_model) # Predict (on the same data that was trained on...)
+# Create a confusion matrix to evaluate the predictions
+confusion_matrix = confusionMatrix(lda_pred$class, searchlight_imputed_renamed$genetic_status)
+# Visualize the confusion matrix
+print(confusion_matrix)
+
+# Create a combined data.table with the genetic_status, sfari_id, phenotypes, PCs, and LDs, and demographics...
+df_imputed_with_pcs_lds = cbind(df_imputed_with_pcs, lda_pred$x)
+is.data.table(df_imputed_with_pcs_lds)
+
+
+# Define predictors (excluding ID and outcome)
+predictor_cols <- setdiff(colnames(spark_df_with_commmon_levels), c("sfari_id", "genetic_status"))
+
+# 1. Predict on searchlight_imputed
+lda_pred_test <- predict(lda_model, newdata = spark_df_with_commmon_levels %>% select(-sfari_id, -genetic_status))
+
+# 2. Align factor levels between prediction and reference
+common_levels <- intersect(levels(lda_pred_test$class), levels(spark_df_with_commmon_levels$genetic_status))
+pred_aligned <- factor(lda_pred_test$class, levels = common_levels)
+ref_aligned  <- factor(spark_df_with_commmon_levels$genetic_status, levels = common_levels)
+
+# 3. Compute confusion matrix
+confusion_matrix <- confusionMatrix(pred_aligned, ref_aligned)
+print(confusion_matrix)
+
+# Build a 2-column data.frame: actual vs predicted
+results <- data.frame(
+  sfari_id        = spark_df_with_commmon_levels$sfari_id,  
+  actual_status   = spark_df_with_commmon_levels$genetic_status,
+  predicted_status = lda_pred_test$class
+)
+
+# How many rows?
+nrow(results)   # should be the number of SPARK samples you predicted on
+print(results)
+
+
 
